@@ -1,34 +1,15 @@
-/*
- *  SLAMTEC LIDAR
- *  Ultra Simple Data Grabber Demo App
- *
- *  Copyright (c) 2009 - 2014 RoboPeak Team
- *  http://www.robopeak.com
- *  Copyright (c) 2014 - 2020 Shanghai Slamtec Co., Ltd.
- *  http://www.slamtec.com
- *
- */
-/*
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
- */
+#include <stdio.h>   // This includes the standard input and output functions, which are often used for console input and output.
+#include <stdlib.h>  // This includes the standard library functions, which provide memory allocation, type conversion, and other fundamental operations.
+#include <signal.h>  // This includes the signal handling functions, which are used for managing signals in a program.
+#include <string.h>  // This includes string manipulation functions.
+#include <iostream>
+#include <fstream>   // Include the necessary header for file I/O
+#include <chrono>
+#include <ctime>
+#include <iomanip>   // for std::put_time
+#include <cstdlib>   // For system function
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <signal.h>
-#include <string.h>
-
+/*These include custom header files specific to the project.*/
 #include "sl_lidar.h" 
 #include "sl_lidar_driver.h"
 #ifndef _countof
@@ -49,6 +30,15 @@ static inline void delay(sl_word_size_t ms){
         usleep(ms*1000);
 }
 #endif
+
+void clearScreen() {
+#ifdef _WIN32
+    std::system("cls");
+#else
+    // Assume Unix-like system
+    std::system("clear");
+#endif
+}
 
 using namespace sl;
 
@@ -92,8 +82,10 @@ void ctrlc(int)
 {
     ctrl_c_pressed = true;
 }
+float middle_point = 180.0f;
 
 int main(int argc, const char * argv[]) {
+
 	const char * opt_is_channel = NULL; 
 	const char * opt_channel = NULL;
     const char * opt_channel_param_first = NULL;
@@ -101,14 +93,12 @@ int main(int argc, const char * argv[]) {
     sl_u32         baudrateArray[2] = {115200, 256000};
     sl_result     op_result;
 	int          opt_channel_type = CHANNEL_TYPE_SERIALPORT;
-
 	bool useArgcBaudrate = false;
 
     IChannel* _channel;
 
     printf("Ultra simple LIDAR data grabber for SLAMTEC LIDAR.\n"
            "Version: %s\n", SL_LIDAR_SDK_VERSION);
-
 	 
 	if (argc>1)
 	{ 
@@ -163,7 +153,6 @@ int main(int argc, const char * argv[]) {
 		}
 	}
 
-    
     // create the driver instance
 	ILidarDriver * drv = *createLidarDriver();
 
@@ -228,7 +217,6 @@ int main(int argc, const char * argv[]) {
         }
     }
 
-
     if (!connectSuccess) {
         (opt_channel_type == CHANNEL_TYPE_SERIALPORT)?
 			(fprintf(stderr, "Error, cannot bind to the specified serial port %s.\n"
@@ -251,8 +239,6 @@ int main(int argc, const char * argv[]) {
             , devinfo.firmware_version & 0xFF
             , (int)devinfo.hardware_version);
 
-
-
     // check health...
     if (!checkSLAMTECLIDARHealth(drv)) {
         goto on_finished;
@@ -265,22 +251,53 @@ int main(int argc, const char * argv[]) {
     // start scan...
     drv->startScan(0,1);
 
+
     // fetech result and print it out...
+    delay(1000);
     while (1) {
         sl_lidar_response_measurement_node_hq_t nodes[8192];
         size_t   count = _countof(nodes);
 
         op_result = drv->grabScanDataHq(nodes, count);
+        clearScreen();
+        printf("Set_Start.\n");
+
+        // Get the current time and format it as a timestamp with milliseconds
+        auto now = std::chrono::system_clock::now();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+        std::time_t current_time = std::chrono::system_clock::to_time_t(now);
+        
+        char timestamp[25]; // Adjust the size for milliseconds
+        std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", std::localtime(&current_time));
+
+        // Append milliseconds to the timestamp
+        std::sprintf(timestamp + 19, ".%03d", static_cast<int>(ms.count()));
+        JsonEntry entry;
+        entry.timestamp = timestamp;
+        
+        
 
         if (SL_IS_OK(op_result)) {
             drv->ascendScanData(nodes, count);
+
             for (int pos = 0; pos < (int)count ; ++pos) {
-                printf("%s theta: %03.2f Dist: %08.2f Q: %d \n", 
-                    (nodes[pos].flag & SL_LIDAR_RESP_HQ_FLAG_SYNCBIT) ?"S ":"  ", 
-                    (nodes[pos].angle_z_q14 * 90.f) / 16384.f,
-                    nodes[pos].dist_mm_q2/4.0f,
-                    nodes[pos].quality >> SL_LIDAR_RESP_MEASUREMENT_QUALITY_SHIFT);
+                float raw_angle_degrees = (nodes[pos].angle_z_q14 * 90.f) / 16384.f;
+                float quality = nodes[pos].quality
+               ;
+                // Filter data within the specified range
+                if ((raw_angle_degrees >= 0.0f && raw_angle_degrees <= 33.0f) || (raw_angle_degrees >= 327.0f && raw_angle_degrees <= 360.0f)) {
+                   
+                    if (quality > 0)
+                    {
+                        printf("%03.2f %08.2f\n", 
+                            //(nodes[pos].flag & SL_LIDAR_RESP_HQ_FLAG_SYNCBIT) ?"S ":"  ", 
+                            raw_angle_degrees,
+                            nodes[pos].dist_mm_q2/4.0f);
+                    }
+
+                }
             }
+
         }
 
         if (ctrl_c_pressed){ 
@@ -288,7 +305,8 @@ int main(int argc, const char * argv[]) {
         }
     }
 
-    drv->stop();
+    
+    drv->stop();                                                                                                                             
 	delay(200);
 	if(opt_channel_type == CHANNEL_TYPE_SERIALPORT)
         drv->setMotorSpeed(0);
@@ -298,6 +316,8 @@ on_finished:
         delete drv;
         drv = NULL;
     }
+    // Close the file
+    //outFile.close();
     return 0;
 }
 
